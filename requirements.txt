@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+scikit-learn
+matplotlib
+transformers
+torch
+openai
+python-multipart
+jsonify
