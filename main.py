@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 import json
 import logging
+import os
+from routers import nlp_router, chat_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +21,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include routers
+app.include_router(nlp_router.router, prefix="/api/nlp", tags=["NLP"])
+app.include_router(chat_router.router, prefix="/api/chat", tags=["Chat"])
 
 # Data models
 class Verse(BaseModel):
@@ -40,11 +46,18 @@ class Mandala(BaseModel):
 # Load data from JSON file
 def load_hymn_data():
     try:
-        with open(r"C:\Users\Adi\Projects\vedam\veda-backend\data\rig_veda_formatted_combined.json", "r", encoding="utf-8") as f:
+        data_file = os.path.join(os.path.dirname(__file__), "data", "rig_veda_formatted_combined.json")
+        with open(data_file, "r", encoding="utf-8") as f:
             logger.info("Successfully loaded hymn data from file.")
             return json.load(f)
     except FileNotFoundError:
-        logger.error("Hymn data file not found.")
+        logger.error(f"Hymn data file not found at {data_file}")
+        return {"mandalas": []}
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding JSON: {str(e)}")
+        return {"mandalas": []}
+    except Exception as e:
+        logger.error(f"Unexpected error loading hymn data: {str(e)}")
         return {"mandalas": []}
 
 hymn_data = load_hymn_data()
@@ -57,12 +70,21 @@ async def root():
 @app.get("/api/hymns")
 async def get_hymns():
     logger.info("Fetching all hymns.")
-    hymns = [hymn for mandala in hymn_data["mandalas"] for hymn in mandala["hymns"]]
+    if not hymn_data or not hymn_data.get("mandalas"):
+        logger.error("No hymn data available")
+        raise HTTPException(status_code=500, detail="No hymn data available")
+    hymns = []
+    for mandala in hymn_data["mandalas"]:
+        hymns.extend(mandala.get("hymns", []))
     return {"hymns": hymns}
 
 @app.get("/api/hymns/{mandala}")
 async def get_hymns_by_mandala(mandala: int):
     logger.info(f"Fetching hymns for Mandala {mandala}.")
+    if not hymn_data or not hymn_data.get("mandalas"):
+        logger.error("No hymn data available")
+        raise HTTPException(status_code=500, detail="No hymn data available")
+    
     mandala_data = next((m for m in hymn_data["mandalas"] if m["number"] == mandala), None)
     if not mandala_data:
         logger.warning(f"No hymns found for Mandala {mandala}.")
@@ -71,14 +93,16 @@ async def get_hymns_by_mandala(mandala: int):
 
 @app.get("/api/hymns/{mandala}/{hymn}")
 async def get_hymn(mandala: int, hymn: int):
-    if not hymn_data.get("mandalas"):
-        logger.warning("No hymn data available.")
-        raise HTTPException(status_code=500, detail="Hymn data is not available.")
     logger.info(f"Fetching Hymn {hymn} from Mandala {mandala}.")
+    if not hymn_data or not hymn_data.get("mandalas"):
+        logger.error("No hymn data available")
+        raise HTTPException(status_code=500, detail="No hymn data available")
+    
     mandala_data = next((m for m in hymn_data["mandalas"] if m["number"] == mandala), None)
     if not mandala_data:
         logger.warning(f"No hymns found for Mandala {mandala}.")
         raise HTTPException(status_code=404, detail=f"No hymns found for Mandala {mandala}")
+    
     hymn_entry = next((h for h in mandala_data["hymns"] if h["number"] == hymn), None)
     if not hymn_entry:
         logger.warning(f"Hymn {hymn} not found in Mandala {mandala}.")
@@ -88,11 +112,15 @@ async def get_hymn(mandala: int, hymn: int):
 @app.get("/api/search")
 async def search_hymns(query: str):
     logger.info(f"Searching hymns with query: {query}")
+    if not hymn_data or not hymn_data.get("mandalas"):
+        logger.error("No hymn data available")
+        raise HTTPException(status_code=500, detail="No hymn data available")
+    
     results = []
     query = query.lower()
     for mandala in hymn_data["mandalas"]:
-        for hymn in mandala["hymns"]:
-            for verse in hymn["verses"]:
+        for hymn in mandala.get("hymns", []):
+            for verse in hymn.get("verses", []):
                 if (query in verse["sanskrit"].lower() or 
                     query in verse["translation"].lower() or 
                     (verse.get("transliteration") and query in verse["transliteration"].lower())):
@@ -102,6 +130,4 @@ async def search_hymns(query: str):
                         "verse_number": verse["number"],
                         "verse": verse
                     })
-    if not results:
-        logger.info("No results found for search query.")
     return {"results": results}
